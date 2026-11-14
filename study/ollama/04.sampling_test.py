@@ -17,7 +17,7 @@ settings = [
 results = []
 
 for options in settings:
-    for repeat in range(1, 4):
+    for repeat in range(1, 4):  # temperature 에 따른 답변의 다양성 관찰을 동일 질문을 반복 수행
         print(f"\n{'=' * 65}")
         print(
             f"Temperature={options['temperature']}, "
@@ -34,7 +34,7 @@ for options in settings:
                 **options,
                 "num_predict": 400,
                 # "seed": 42    # seed=42는 무작위 샘플링의 재현성을 높이기 위한 설정
-                # seed를 고정하면 동일한 조건에서 결과를 재현하기 쉬워집니다. 실행할 때마다 생성되는 답변의 다양성을 관찰하기 위해 제거
+                                # seed를 고정하면 동일한 조건에서 결과를 재현하기 쉬워집니다. 실행할 때마다 생성되는 답변의 다양성을 관찰하기 위해 제거
             }
         }
 
@@ -79,4 +79,4 @@ for r in results:
         f"{r['tokens']:>8}"
         f"{speed:>9.2f}"
         f"{str(r['done_reason']):>10}"
-    )
+X    )
