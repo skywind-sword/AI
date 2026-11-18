@@ -1,54 +1,602 @@
+
+# ============================================================
+# 프로그램명 : 05.embedding_test.py
+#
+# [학습 목적]
+# 1. Embedding(임베딩)의 개념을 이해한다.
+# 2. EmbeddingGemma 모델을 사용하여 문장을 벡터로 변환한다.
+# 3. 문장 간 코사인 유사도(Cosine Similarity)를 계산한다.
+# 4. 문장의 단어가 달라도 의미가 비슷하면 벡터가
+#    유사한 방향으로 표현될 수 있음을 확인한다.
+#
+# [실습 환경]
+# Windows PC
+#   - Ollama
+#   - EmbeddingGemma 300M
+#   - REST API 포트 : 11434
+#
+# Android 갤럭시 폴드6
+#   - Termux + llama.cpp
+#   - EmbeddingGemma 300M GGUF
+#   - REST API 포트 : 8081
+#
+# [Embedding이란?]
+# 텍스트를 고정된 차원의 숫자 벡터로 변환하는 기술이다.
+#
+# 예)
+# "카드 결제금액 조회"
+#       ↓ Embedding 모델
+# [0.12, -0.03, 0.25, ...]
+#
+# EmbeddingGemma 300M 모델은 기본적으로
+# 768차원 벡터를 생성한다.
+#
+# 768차원이란 하나의 문장이 768개의 실수로
+# 표현된다는 의미이다.
+#
+# 실제 Embedding 모델은 복잡한 신경망 계산을 통해
+# 문장의 문맥과 의미를 벡터 공간에 표현한다.
+#
+# [일반 LLM과 Embedding 모델의 차이]
+#
+# Gemma 3 4B (생성형 LLM)
+#   입력 : "Python의 리스트란?"
+#   출력 : "리스트는 여러 데이터를 저장하는..."
+#
+# EmbeddingGemma (Embedding 모델)
+#   입력 : "Python의 리스트란?"
+#   출력 : [0.01, -0.02, 0.15, ...]
+#
+# 즉 Embedding 모델은 질문에 직접 답변하지 않고
+# 문장을 벡터화하는 역할을 한다.
+#
+# [RAG와의 관계]
+# RAG에서는 일반적으로 문서와 질문을 벡터화하고,
+# 벡터 유사도를 이용해 관련 문서를 검색한다.
+#
+# 검색된 문서는 이후 생성형 LLM에 전달되어
+# 최종 답변의 근거로 사용된다.
+#
+# 다만 모든 RAG가 Embedding을 필수로 사용하는 것은
+# 아니며, BM25 같은 키워드 검색도 가능하다.
+#
+# [이번 실습의 범위]
+# 문장 간 유사도 비교까지만 구현한다.
+# 문서 검색 및 LLM 답변 생성은 포함하지 않는다.
+# ============================================================
+
+
+# ============================================================
+# 1. 라이브러리 import
+# ============================================================
+
+# JSON(JavaScript Object Notation) 처리 라이브러리
+#
+# Python dict/list를 JSON으로 변환하거나,
+# 서버에서 받은 JSON을 Python 객체로 변환한다.
 import json
+
+# 수학 함수 라이브러리
+#
+# sqrt() : 제곱근 계산
+# 코사인 유사도 계산에서 벡터 크기를 구할 때 사용한다.
 import math
+
+# HTTP 통신을 위한 Python 표준 라이브러리
+#
+# Request : HTTP 요청 객체 생성
+# urlopen : HTTP 요청 전송 및 응답 수신
+#
+# requests 같은 외부 패키지 없이 REST API 호출이 가능하다.
 from urllib.request import Request, urlopen
 
-# URL = "http://127.0.0.1:8081/v1/embeddings"     # 갤폴드6 llama.cpp에서 EmbeddingGemma 호출
-URL = "http://127.0.0.1:11434/api/embed"        # Windows ollama에서 EmbeddingGemma 호출
 
-sentences = [
-    "이번 달 카드 결제금액이 얼마인가요?",
-    "이번 달 신용카드 청구액을 알려주세요.",
-    "신용카드를 분실했어요.",
-    "카드 분실 신고는 어떻게 하나요?",
-    "오늘 서울 날씨가 어떤가요?"
-]
+# ============================================================
+# 2. 실행 환경 설정
+# ============================================================
 
-# 문장 유사도 비교용 접두어
-prefix = "task: sentence similarity | query: "
+# 실행할 Embedding 서버 종류를 설정한다.
+#
+# "ollama"
+#   - Windows PC
+#   - Ollama 서버를 이용한 Embedding
+#
+# "llama"
+#   - Android Termux
+#   - llama.cpp의 llama-server를 이용한 Embedding
+#
+# 실행 환경에 따라 이 값만 변경하면 된다.
+BACKEND = "llama"
 
-payload = {
-    # "model": "embeddinggemma",        # 갤폴드6 llama.cpp에서 embeddinggemma 사용
-    "model": "embeddinggemma-local",    # Windows ollama에서 embeddinggemaa tkdyd
-    "input": [prefix + s for s in sentences]    # Windows(ollama)에서 embeddinggemma 사용
-}
 
-req = Request(
-    URL,
-    data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-    headers={"Content-Type": "application/json"}
-)
+if BACKEND == "ollama":
 
-with urlopen(req, timeout=180) as response:
-    result = json.load(response)
+    # Ollama 기본 API 서버 주소
+    #
+    # 127.0.0.1 : 프로그램이 실행되는 자기 자신(Localhost)
+    # 11434     : Ollama 기본 포트
+    # /api/embed: Ollama의 Embedding API
+    URL = "http://127.0.0.1:11434/api/embed"
 
-# 입력 문장 순서대로 벡터 정렬
-# 겔폴드6 llama.cpp 버전
-# data = sorted(result["data"], key=lambda x: x["index"])
-# vectors = [item["embedding"] for item in data]
+    # Ollama에 등록된 Embedding 모델명
+    MODEL = "embeddinggemma-local"
 
-# ollama 버전
-vectors = result["embeddings"]
+elif BACKEND == "llama":
+
+    # llama.cpp에서 실행 중인 Embedding 서버 주소
+    #
+    # 8081 : EmbeddingGemma용으로 지정한 포트
+    #
+    # /v1/embeddings :
+    # llama.cpp에서 제공하는 OpenAI 호환 Embedding API
+    URL = "http://127.0.0.1:8081/v1/embeddings"
+
+    # llama-server 실행 시 --alias로 지정한 모델명
+    MODEL = "embeddinggemma"
+
+else:
+
+    # 지원하지 않는 실행 환경을 지정한 경우 오류 발생
+    raise ValueError(
+        "BACKEND는 'ollama' 또는 'llama'로 지정해야 합니다."
+    )
+
+
+# ============================================================
+# 3. Embedding 벡터 생성 함수
+# ============================================================
+
+def get_embeddings(sentences):
+    """
+    [목적]
+    여러 개의 문장을 EmbeddingGemma 모델에 전달하고
+    각 문장에 대한 Embedding 벡터를 반환한다.
+
+    [매개변수]
+    sentences : list[str]
+        Embedding할 문장 목록
+
+    [반환값]
+    list[list[float]]
+        각 문장의 Embedding 벡터 목록
+
+    [예시]
+    입력:
+        [
+            "카드 결제금액을 알려주세요",
+            "이번 달 카드 청구액은?"
+        ]
+
+    출력:
+        [
+            [0.01, -0.02, ...],
+            [0.03, -0.01, ...]
+        ]
+
+    [주의]
+    Embedding 모델은 문장을 숫자로 변환할 뿐
+    벡터 간 유사도를 직접 계산하지 않는다.
+
+    이번 실습에서는 cosine_similarity() 함수가
+    벡터 간 유사도를 계산한다.
+    """
+
+    # --------------------------------------------------------
+    # STEP 1. Embedding 입력 문장 구성
+    # --------------------------------------------------------
+
+    # EmbeddingGemma는 작업 종류에 따라
+    # 입력 텍스트에 접두어(Prefix)를 사용할 수 있다.
+    #
+    # 이번 실습은 문장 간 의미적 유사도 비교이므로
+    # Sentence Similarity 작업용 접두어를 사용한다.
+    #
+    # Prefix는 단순한 장식 문자열이 아니라
+    # 모델이 어떤 목적으로 Embedding을 생성할지
+    # 구분하도록 돕는 입력 형식이다.
+    prefix = "task: sentence similarity | query: "
+
+    # 리스트 컴프리헨션(List Comprehension)
+    #
+    # sentences의 각 문장 앞에 prefix를 붙여
+    # 새로운 문자열 목록을 생성한다.
+    #
+    # 예:
+    # "이번 달 카드 결제금액이 얼마인가요?"
+    #
+    # 변환:
+    # "task: sentence similarity | query: 이번 달 카드..."
+    input_texts = [
+        prefix + sentence
+        for sentence in sentences
+    ]
+
+    # --------------------------------------------------------
+    # STEP 2. REST API 요청 데이터 생성
+    # --------------------------------------------------------
+
+    # REST API에 전달할 JSON 데이터
+    #
+    # model : 서버에서 사용할 Embedding 모델
+    # input : Embedding할 문자열 목록
+    #
+    # 여러 문자열을 하나의 요청으로 전달할 수 있다.
+    payload = {
+        "model": MODEL,
+        "input": input_texts
+    }
+
+    # Python dict 객체를 JSON 문자열로 변환한다.
+    #
+    # ensure_ascii=False :
+    # 한글을 \uXXXX 형태로 바꾸지 않고
+    # 읽을 수 있는 한글 문자열로 유지한다.
+    #
+    # encode("utf-8") :
+    # HTTP 전송을 위해 문자열을 bytes로 변환한다.
+    json_data = json.dumps(
+        payload,
+        ensure_ascii=False
+    ).encode("utf-8")
+
+    # --------------------------------------------------------
+    # STEP 3. HTTP 요청 객체 생성
+    # --------------------------------------------------------
+
+    # Request 객체는 HTTP 요청 정보를 가진다.
+    #
+    # URL       : 요청할 서버 주소
+    # data      : HTTP 요청 본문
+    # headers   : HTTP 헤더
+    #
+    # data를 지정하면 기본적으로 POST 요청이 된다.
+    #
+    # Content-Type:
+    # 서버에 요청 본문이 JSON 형식임을 알려준다.
+    req = Request(
+        URL,
+        data=json_data,
+        headers={
+            "Content-Type": "application/json"
+        }
+    )
+
+    # --------------------------------------------------------
+    # STEP 4. Embedding 서버 호출
+    # --------------------------------------------------------
+
+    # urlopen()은 REST API 요청을 전송한다.
+    #
+    # timeout=180 :
+    # HTTP 요청의 제한시간을 180초로 지정한다.
+    # 서버 처리 자체를 180초 이내로 보장하는 설정은 아니다.
+    #
+    # with 구문:
+    # 요청 처리가 끝나면 응답 객체의 자원을 정리한다.
+    #
+    # json.load(response):
+    # 응답 스트림에 들어 있는 JSON을 읽고
+    # Python dict/list 객체로 변환한다.
+    with urlopen(req, timeout=180) as response:
+        result = json.load(response)
+
+    # --------------------------------------------------------
+    # STEP 5. 서버 종류별 Embedding 결과 추출
+    # --------------------------------------------------------
+
+    # 두 서버는 같은 Embedding 기능을 제공하지만
+    # REST API의 JSON 응답 구조가 다르다.
+
+    if BACKEND == "ollama":
+
+        # Ollama의 응답 구조(핵심 부분):
+        #
+        # {
+        #   "embeddings": [
+        #       [0.01, -0.02, ...],
+        #       [0.03, -0.01, ...]
+        #   ]
+        # }
+        #
+        # embeddings 키 안에 문장별 벡터가 들어 있다.
+        vectors = result["embeddings"]
+
+    else:
+
+        # llama.cpp의 OpenAI 호환 API 응답 구조:
+        #
+        # {
+        #   "data": [
+        #       {
+        #           "index": 0,
+        #           "embedding": [0.01, -0.02, ...]
+        #       },
+        #       {
+        #           "index": 1,
+        #           "embedding": [0.03, -0.01, ...]
+        #       }
+        #   ]
+        # }
+        #
+        # index는 입력 문자열의 위치를 나타낸다.
+        #
+        # index를 기준으로 정렬하면 입력 순서에 맞게
+        # Embedding 벡터를 추출할 수 있다.
+        data = sorted(
+            result["data"],
+            key=lambda item: item["index"]
+        )
+
+        # 각 항목에서 embedding 값만 추출한다.
+        #
+        # item은 다음과 같은 dict 객체이다.
+        #
+        # {
+        #   "index": 0,
+        #   "embedding": [...]
+        # }
+        vectors = [
+            item["embedding"]
+            for item in data
+        ]
+
+    # --------------------------------------------------------
+    # STEP 6. Embedding 벡터 반환
+    # --------------------------------------------------------
+
+    # 입력 문장 5개라면 벡터도 5개가 반환된다.
+    #
+    # 기본 768차원을 사용하는 경우
+    # 각 벡터는 768개의 실수로 구성된다.
+    #
+    # 결과 데이터 형태:
+    #
+    # [
+    #   [768개의 실수],
+    #   [768개의 실수],
+    #   ...
+    # ]
+    return vectors
+
+
+# ============================================================
+# 4. 코사인 유사도 계산 함수
+# ============================================================
 
 def cosine_similarity(a, b):
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(y * y for y in b))
+    """
+    [목적]
+    두 문장의 Embedding 벡터를 비교하여
+    코사인 유사도를 계산한다.
+
+    [매개변수]
+    a : 첫 번째 문장의 Embedding 벡터
+    b : 두 번째 문장의 Embedding 벡터
+
+    [반환값]
+    float : 코사인 유사도
+
+    [계산 공식]
+    cosine = (A · B) / (|A| × |B|)
+
+    A · B : 두 벡터의 내적(Dot Product)
+    |A|   : A 벡터의 크기
+    |B|   : B 벡터의 크기
+
+    [코사인 유사도의 특징]
+     1.0 : 두 벡터가 같은 방향
+     0.0 : 두 벡터가 직교
+    -1.0 : 두 벡터가 반대 방향
+
+    코사인 유사도는 일반적으로 -1 ~ 1 범위이다.
+
+    단, 실제 Embedding 벡터의 점수 분포는
+    사용하는 모델과 입력 데이터에 따라 다르다.
+
+    코사인 유사도 0.9가 정답률 90%를 의미하지는 않는다.
+    """
+
+    # --------------------------------------------------------
+    # STEP 1. 두 벡터의 내적(Dot Product) 계산
+    # --------------------------------------------------------
+
+    # zip(a, b)는 같은 위치에 있는 요소끼리 묶는다.
+    #
+    # 예:
+    # a = [1, 2, 3]
+    # b = [4, 5, 6]
+    #
+    # zip(a, b)
+    # → (1,4), (2,5), (3,6)
+    #
+    # 내적:
+    # 1*4 + 2*5 + 3*6 = 32
+    dot = sum(
+        x * y
+        for x, y in zip(a, b)
+    )
+
+    # --------------------------------------------------------
+    # STEP 2. 벡터의 크기(Norm) 계산
+    # --------------------------------------------------------
+
+    # 벡터의 크기는 각 요소의 제곱합에
+    # 제곱근을 적용하여 계산한다.
+    #
+    # 예:
+    # a = [3, 4]
+    #
+    # |a| = sqrt(3² + 4²) = 5
+    #
+    # sqrt()는 Square Root(제곱근) 함수이다.
+    norm_a = math.sqrt(
+        sum(x * x for x in a)
+    )
+
+    norm_b = math.sqrt(
+        sum(y * y for y in b)
+    )
+
+    # --------------------------------------------------------
+    # STEP 3. 영벡터(Zero Vector) 처리
+    # --------------------------------------------------------
+
+    # 모든 요소가 0이면 벡터 크기는 0이다.
+    #
+    # 영벡터는 방향이 정의되지 않으므로
+    # 코사인 유사도를 계산할 수 없다.
+    #
+    # 이번 실습에서는 오류를 방지하기 위해
+    # 편의상 0.0을 반환한다.
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+
+    # --------------------------------------------------------
+    # STEP 4. 코사인 유사도 계산 및 반환
+    # --------------------------------------------------------
+
+    # 두 벡터의 내적을 벡터 크기의 곱으로 나눈다.
+    #
+    # 유사도가 클수록 벡터 방향이 유사하다.
     return dot / (norm_a * norm_b)
 
-print("벡터 개수:", len(vectors))
-print("벡터 차원:", len(vectors[0]))
-print("\n기준 문장:", sentences[0])
 
-for i in range(1, len(sentences)):
-    score = cosine_similarity(vectors[0], vectors[i])
-    print(f"{score:.4f} : {sentences[i]}")
+# ============================================================
+# 5. 메인 프로그램
+# ============================================================
+
+def main():
+    """
+    [전체 실행 흐름]
+
+    1. 비교할 문장 5개 준비
+    2. EmbeddingGemma로 각 문장을 벡터화
+    3. 첫 번째 문장을 기준으로 설정
+    4. 나머지 4개 문장과 코사인 유사도 비교
+    5. 문장별 유사도 출력
+
+    [학습 포인트]
+    Embedding 모델은 단순한 단어 일치 여부가 아닌
+    문맥 및 의미적 관계를 벡터로 표현할 수 있다.
+
+    다만 높은 유사도가 항상 같은 의미나
+    올바른 검색 결과를 보장하지는 않는다.
+    """
+
+    # --------------------------------------------------------
+    # STEP 1. 테스트할 문장 목록 준비
+    # --------------------------------------------------------
+
+    # 서로 다른 의미적 관계를 가진 문장 5개
+    #
+    # 문장 1과 문장 2:
+    #   의미가 거의 같은 금융 관련 질문
+    #
+    # 문장 3과 문장 4:
+    #   카드 관련이지만 다른 업무 목적의 질문
+    #
+    # 문장 5:
+    #   금융과 무관한 날씨 질문
+    #
+    # 이 문장들을 비교하여 Embedding 모델이
+    # 의미적 유사성을 얼마나 반영하는지 확인한다.
+    sentences = [
+        "이번 달 카드 결제금액이 얼마인가요?",
+        "이번 달 신용카드 청구액을 알려주세요.",
+        "신용카드를 분실했어요.",
+        "카드 분실 신고는 어떻게 하나요?",
+        "오늘 서울 날씨가 어떤가요?"
+    ]
+
+    # --------------------------------------------------------
+    # STEP 2. 문장 Embedding 수행
+    # --------------------------------------------------------
+
+    # get_embeddings() 함수를 호출하여
+    # 각 문장에 대응하는 Embedding 벡터를 생성한다.
+    #
+    # 서버에 문장 목록을 한 번에 전달한다.
+    #
+    # 결과:
+    # vectors[0] : 첫 번째 문장의 벡터
+    # vectors[1] : 두 번째 문장의 벡터
+    # ...
+    vectors = get_embeddings(sentences)
+
+    # 생성된 벡터 개수 확인
+    #
+    # 문장 5개를 입력했으므로 5개가 예상된다.
+    print("벡터 개수:", len(vectors))
+
+    # 하나의 벡터가 몇 개의 숫자로 구성되어 있는지 확인
+    #
+    # EmbeddingGemma 300M 기본 설정에서는 768이 예상된다.
+    print("벡터 차원:", len(vectors[0]))
+
+    # --------------------------------------------------------
+    # STEP 3. 기준 문장 설정
+    # --------------------------------------------------------
+
+    # 첫 번째 문장을 기준으로 나머지 문장들과 비교한다.
+    #
+    # 기준 문장을 변경하면 다른 문장들의
+    # 상대적 유사도를 확인할 수 있다.
+    print("\n기준 문장:", sentences[0])
+
+    # --------------------------------------------------------
+    # STEP 4. 코사인 유사도 비교
+    # --------------------------------------------------------
+
+    # range(1, len(sentences))
+    #
+    # 인덱스 1부터 마지막 인덱스까지 반복한다.
+    # 0번 문장은 기준 문장이므로 비교에서 제외한다.
+    #
+    # sentences[0]과 sentences[i]의
+    # Embedding 벡터를 비교한다.
+    for i in range(1, len(sentences)):
+
+        # 두 Embedding 벡터 간 코사인 유사도 계산
+        score = cosine_similarity(
+            vectors[0],
+            vectors[i]
+        )
+
+        # f-string을 이용한 결과 출력
+        #
+        # {score:.4f}
+        # 소수점 아래 넷째 자리까지 표시한다.
+        #
+        # 출력 예:
+        # 0.9086 : 이번 달 신용카드 청구액을 알려주세요.
+        #
+        # 수치는 사용하는 모델 및 실행 설정에 따라
+        # 달라질 수 있다.
+        print(
+            f"{score:.4f} : {sentences[i]}"
+        )
+
+
+# ============================================================
+# 6. 프로그램 시작점
+# ============================================================
+
+# Python은 파일을 위에서 아래로 실행한다.
+#
+# def 문을 만나면 함수 객체를 정의하지만,
+# 그 시점에 함수 본문을 실행하지는 않는다.
+#
+# 직접 실행한 Python 파일에서는
+# __name__ 값이 "__main__"으로 설정된다.
+#
+# 따라서 아래 조건이 참이면 main()을 호출한다.
+#
+# 다른 Python 파일에서 이 모듈을 import하면
+# __name__은 모듈 이름으로 설정되므로
+# main()이 자동 실행되지 않는다.
+#
+# Java의 public static void main()과 비슷하게
+# 프로그램의 시작점을 명확하게 구성할 수 있다.
+
+if __name__ == "__main__":
+    main()
