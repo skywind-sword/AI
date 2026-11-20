@@ -36,7 +36,8 @@ BACKEND = "llama"  # "ollama" 또는 "llama"
 
 if BACKEND == "ollama":
     EMBED_URL = "http://127.0.0.1:11434/api/embed"
-    LLM_URL = "http://127.0.0.1:11434/api/generate"
+    # LLM_URL = "http://127.0.0.1:11434/api/generate"
+    LLM_URL = "http://127.0.0.1:11434/api/chat"
     EMBED_MODEL = "embeddinggemma-local"
     LLM_MODEL = "gemma3-4b-local"
 
@@ -247,28 +248,32 @@ def search_documents(question, doc_vectors):
 # ============================================================
 # 7. 검색 문서를 이용한 답변 생성
 # ============================================================
-
-
 def generate_answer(question, search_results):
     """
-    [목적]
-    검색된 문서를 Prompt에 추가하여 LLM에 전달한다.
+    [목적] 검색된 문서를 Context로 구성하고, 질문 및 답변지침과 함께 LLM에 전달하여 최종 답변을 생성한다.
 
     [RAG의 Generation 단계]
-    생성형 LLM은 외부 문서를 학습하는 것이 아니라
-    현재 입력된 Context로 참고하여 답변을 생성한다.
-
-    검색 문서에 없는 정보를 임의로 만들지 않도록
-    답변 지침을 명시하지만, 실제 준수 여부는
-    별도로 검증해야 한다.
+    검색된 외부 문서를 모델에 학습시키는 것이 아니라, 현재 요청의 Context로 제공하여 답변에 활용한다. 
+    단, 문서 근거를 준수했는지는 별도 검증이 필요하다. 
     """
 
-    # 검색 문서를 번호와 함께 Context로 구성한다.
+    # 1. 검색 문서를 번호와 함께 Context로 구성한다.
+    #   예) search_results = [
+    #            (0.92, {"title": "해외 반복 결제 이상거래", "text": "해외 결제가 .... "},
+    #            (0.45, {"title": "카드 분실 신고 절차", "text": " .... "},
+    #            (0.81, {"title": "이상거래 사고 사례", "text": " .... "},
+    #       ]
+    #  - (_,doc) : search_results의 유사도는 사용하지 않고, 문서만 doc으로 받음
+    #    . "_"는 사용하지 않는 값이라는 의도를 나타내는 관례적인 변수명임
+    #  - f"[{i}] {doc['title']}\n{doc['text']}" : 'title'과 'text' 만 context에 붙임
+    #  - "\n\n".join() : 문서 사이에 빈 줄을 넣어 하나의 문자열로 결합
+    #  - context 예시) : [1] 카드 분실 신고 절차\n카드를 분실한 고객은 카드사에 신고한다. 본인 확인 후 카드 사용정지 및 재발급 절차를 진행한다.\n\n[2] 해외 반복 결제 이상거래\n해외 결제가 짧은 시간에 반복 발생하면 이전 거래 이력, 거래 국가, 결제 패턴…
     context = "\n\n".join(
         f"[{i}] {doc['title']}\n{doc['text']}"
         for i, (_, doc) in enumerate(search_results, 1)
     )
 
+    # LLM에게 "근거자료"와 "참고문서"를 명확히 전달하기 위해 "[참고 문서]"와 "[사용자 질문]"을 분리함
     prompt = f"""
 너는 금융 FDS 업무를 지원하는 AI 어시스턴트다.
 
@@ -284,7 +289,7 @@ def generate_answer(question, search_results):
 
 [답변]
 """
-
+    # 2. LLM 호출 후 결과 반환
     if BACKEND == "ollama":
         result = call_api(
             LLM_URL,
@@ -311,6 +316,21 @@ def generate_answer(question, search_results):
             "stream": False,
         },
     )
+          # 실제 서비스를 구축할 때는 다음과 같은 구조도 고려할 수 있음
+          # 시스템 지침과 사용자 질문/참고자료를 메시지 역할 수준에서 구분할 수 있음 
+          # ( 단, 메지시 분리만으로 참고문서의 악성지시나 할루시네이션이 완전히 방지되지는 않음 )
+          #
+          # "messages": [
+          #   {
+          #       "role": "system",
+          #       "content": "너는 금융 FDS 업무 지원 AI다. 참고 문서에 근거해 답변하라."
+          #   },
+          #   {
+          #       "role": "user",
+          #       "content": f"[참고 문서]\n{context}\n\n[질문]\n{question}"
+          #   }
+          # ]
+  
 
     return result["choices"][0]["message"]["content"]
 
@@ -336,10 +356,10 @@ def main():
     # )
     question = "카드를 잃어 버렸는데 어떻게 처리해야하나요?"
 
-    # STEP 1. 전체 문서의 임베딩 벡터를 읽어옴
+    # STEP 1. 전체 문서의 임베딩 벡터를 읽어옴 (없으면 생성)
     doc_vectors = get_document_vectors()
 
-    # STEP 2. 관련 문서 검색
+    # STEP 2. 질문과 유사한 벡터의 문서를 찾음
     search_results = search_documents(question, doc_vectors)
 
     print("\n========== 검색 결과 ==========")
