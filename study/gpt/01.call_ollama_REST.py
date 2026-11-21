@@ -1,8 +1,6 @@
 # Python (requests) → Ollama (localhost:11434) → Gemma 3 (로컬 LLM)
 # 내용 : HTTP 요청, JSON 응답, 모델 파라미터, 토큰 사용량 확인
 # Ollama가 단순한 채팅 프로그램이 아니라 로컬에서 실행되는 API 서버 역할도 한다。
-
-
 import requests
 
 url = "http://localhost:11434/api/generate"

@@ -9,9 +9,9 @@ url = "http://localhost:11434/api/generate"
 
 models = [
     "gemma3-4b-local:latest",
-    # "llama3.2-3b-local:latest",
-    # "qwen3-4b-local:latest",
-    # "qwen3-8b-local:latest"
+    "llama3.2-3b-local:latest",
+    "qwen3-4b-local:latest",
+    "qwen3-8b-local:latest"
 ]
 
 prompt = "Java와 Python 각 언어의 장단점과 AI를 공부할 때 어떤 언어로 하면 좋을지 알려줘"
